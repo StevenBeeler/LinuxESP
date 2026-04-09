@@ -21,7 +21,8 @@ autoinstall:
     - git
     - wget
     - gpg
-  snaps: # Install apps from this catalog: https://snapcraft.io/store
+    - python3
+  snaps:
     - name: code
       classic: true
     - name: postman
@@ -45,6 +46,16 @@ autoinstall:
     - curtin in-target --target=/target -- rm microsoft.gpg
     - curtin in-target --target=/target -- apt-get update
     - curtin in-target --target=/target -- apt-get install -y microsoft-edge-stable
+
+    # Install Microsoft Defender for Endpoint
+    - curtin in-target --target=/target -- sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/ubuntu/24.04/prod noble main" >> /etc/apt/sources.list.d/microsoft-ubuntu-noble-prod.list'
+    - curtin in-target --target=/target -- apt-get update
+    - curtin in-target --target=/target -- apt-get install -y mdatp
+
+    # Read SAS token from kernel cmdline and download MDE onboarding script
+    - curtin in-target --target=/target -- sh -c 'SAS=$(cat /proc/cmdline | tr " " "\n" | grep "ONBOARDING_SAS" | cut -d= -f2-) && curl -f -o /tmp/onboarding.py "https://linuxesp.blob.core.windows.net/linuxesp/MicrosoftDefenderATPOnboardingLinuxServer.py?${SAS}" || echo "ERROR: Failed to download onboarding script. Check SAS token."'
+    - curtin in-target --target=/target -- sh -c 'test -f /tmp/onboarding.py && python3 /tmp/onboarding.py || echo "ERROR: Onboarding script not found, skipping."'
+    - curtin in-target --target=/target -- rm -f /tmp/onboarding.py
 
     # Remove bloatware
     - curtin in-target --target=/target -- apt-get purge -y libreoffice-common
