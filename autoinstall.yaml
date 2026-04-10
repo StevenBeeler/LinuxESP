@@ -11,7 +11,7 @@ autoinstall:
   storage:
     layout:
       name: lvm
-      password: ubuntu   # FIX: must match luksChangeKey call in script
+      password: ubuntu   # must match luksChangeKey call in script
 
 #  keyboard:
 #    layout: de
@@ -40,28 +40,15 @@ autoinstall:
   late-commands:
 
 # ── LUKS first-boot password-change (GUI, post-login) ────────────────────
-    #
-    # Approach: two-script design
-    #   luks-change-password-ui.sh   — runs as the logged-in user, shows
-    #                                   zenity dialogs, validates input
-    #   luks-change-password-root.sh — runs as root via sudo (NOPASSWD),
-    #                                   performs the actual cryptsetup call
-    #
-    # Triggered by /etc/xdg/autostart on first desktop login.
-    # Guard file /var/lib/luks-firstboot is removed on success.
-
-    # User-facing UI script
     - |
       cat > /target/usr/local/bin/luks-change-password-ui.sh << 'SCRIPT'
       #!/bin/bash
 
-      # Exit silently if already completed
       [ ! -f /var/lib/luks-firstboot ] && exit 0
 
       export DISPLAY="${DISPLAY:-:0}"
       export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
 
-      # Opening info dialog — user cannot skip this
       zenity --info \
         --title="Disk Encryption Setup" \
         --width=420 \
@@ -71,9 +58,8 @@ autoinstall:
 
         NEW_PASS=$(zenity --password \
           --title="Set Encryption Password" \
-          --text="Enter your new encryption password (minimum 7 characters):")
+          --text="Enter your new encryption password (minimum 12 characters):")
 
-        # User closed dialog — re-show info and loop, cannot escape
         if [ $? -ne 0 ]; then
           zenity --warning \
             --title="Required" \
@@ -81,10 +67,10 @@ autoinstall:
           continue
         fi
 
-        if [ ${#NEW_PASS} -lt 7 ]; then
+        if [ ${#NEW_PASS} -lt 12 ]; then
           zenity --error \
             --title="Password Too Short" \
-            --text="The password must be at least 7 characters.\nPlease try again."
+            --text="The password must be at least 12 characters.\nPlease try again."
           continue
         fi
 
@@ -106,7 +92,6 @@ autoinstall:
         break
       done
 
-      # Hand off to root script via sudo (NOPASSWD rule, stdin pipe)
       echo "$NEW_PASS" | sudo /usr/local/bin/luks-change-password-root.sh
       RESULT=$?
 
@@ -115,8 +100,6 @@ autoinstall:
           --title="Encryption Password Set" \
           --width=380 \
           --text="<b>Your encryption password has been set successfully.</b>\n\nThis prompt will not appear again."
-
-          gtk-launch intune-portal
       else
         zenity --error \
           --title="Error" \
@@ -126,15 +109,12 @@ autoinstall:
 
     - chmod 0755 /target/usr/local/bin/luks-change-password-ui.sh
 
-    # Root script — only called by the UI script via sudo
     - |
       cat > /target/usr/local/bin/luks-change-password-root.sh << 'SCRIPT'
       #!/bin/bash
 
-      # Read new password from stdin (piped from UI script)
       read -r NEW_PASS
 
-      # Resolve the LUKS backing device
       LUKS_DEV=$(lsblk -rno NAME,TYPE | awk '$2=="crypt"{print $1}' | head -1)
       DEVICE=$(cryptsetup status "$LUKS_DEV" 2>/dev/null | awk '/device:/{print $2}')
 
@@ -143,7 +123,6 @@ autoinstall:
         exit 1
       fi
 
-      # Change the LUKS key: old key via stdin, new key via process substitution
       echo "ubuntu" | cryptsetup luksChangeKey "$DEVICE" <(echo "$NEW_PASS")
 
       if [ $? -eq 0 ]; then
@@ -156,7 +135,6 @@ autoinstall:
 
     - chmod 0700 /target/usr/local/bin/luks-change-password-root.sh
 
-    # Sudoers rule — NOPASSWD only for this specific script, nothing else
     - |
       cat > /target/etc/sudoers.d/luks-change-password << 'EOF'
       ALL ALL=(root) NOPASSWD: /usr/local/bin/luks-change-password-root.sh
@@ -164,7 +142,6 @@ autoinstall:
 
     - chmod 0440 /target/etc/sudoers.d/luks-change-password
 
-    # Autostart desktop entry — triggers on first GUI login for any user
     - mkdir -p /target/etc/xdg/autostart
 
     - |
@@ -179,26 +156,7 @@ autoinstall:
       NotifyStartup=false
       EOF
 
-    # Marker file — removed by root script on success
     - touch /target/var/lib/luks-firstboot
-
-    # ── Disable Ubuntu telemetry prompt ──────────────────────────────────────
-    - curtin in-target --target=/target -- ubuntu-report send no
-
-    # ── Disable GNOME initial setup wizard + Ubuntu Pro prompt ───────────────
-    # Keep the package installed but mark setup as done system-wide.
-    # This is the official enterprise approach — gnome-initial-setup checks
-    # for this file and skips the entire wizard for all users.
-    - mkdir -p /target/etc/gnome-initial-setup
-    - curtin in-target --target=/target -- sh -c 'echo "[pages]" > /etc/gnome-initial-setup/vendor.conf'
-    - curtin in-target --target=/target -- sh -c 'echo "skip=language;keyboard;privacy;software;parental-controls;ubuntu-pro" >> /etc/gnome-initial-setup/vendor.conf'
-    - curtin in-target --target=/target -- systemctl mask ubuntu-advantage-desktop-daemon
-    
-    - mkdir -p /target/etc/skel/.config
-    - touch /target/etc/skel/.config/gnome-initial-setup-done
-
-    # Also disable Ubuntu Pro background notifications (apt_news, MOTD ads)
-    - curtin in-target --target=/target -- pro config set apt_news=false
 
     # ── Firewall (ufw) ────────────────────────────────────────────────────────
     - curtin in-target --target=/target -- apt-get install -y ufw
@@ -222,56 +180,43 @@ autoinstall:
     - curtin in-target --target=/target -- systemctl enable auditd
     - |
       cat >> /target/etc/audit/rules.d/99-intune-baseline.rules << 'EOF'
-      # Login and authentication events
       -w /var/log/faillog -p wa -k logins
       -w /var/log/lastlog -p wa -k logins
       -w /var/log/tallylog -p wa -k logins
-
-      # Sudo usage
       -w /etc/sudoers -p wa -k sudo_changes
       -w /etc/sudoers.d/ -p wa -k sudo_changes
       -w /usr/bin/sudo -p x -k sudo_exec
-
-      # User and group management
       -w /etc/passwd -p wa -k identity
       -w /etc/group -p wa -k identity
       -w /etc/shadow -p wa -k identity
-
-      # System startup scripts
       -w /etc/init.d/ -p wa -k init
       -w /etc/systemd/ -p wa -k systemd
-
-      # Network configuration changes
       -w /etc/hosts -p wa -k network
       -w /etc/network/ -p wa -k network
       EOF
 
-    # ── Microsoft GPG key (shared by all Microsoft packages) ─────────────────
+    # ── Microsoft GPG key ─────────────────────────────────────────────────────
     - curtin in-target --target=/target -- mkdir -p /tmp/microsoft
-    - curtin in-target --target=/target -- sh -c 'curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /tmp/microsoft/microsoft.gpg'
+    - curtin in-target --target=/target -- sh -c 'cd /tmp/microsoft && curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > microsoft.gpg'
     - curtin in-target --target=/target -- install -o root -g root -m 644 /tmp/microsoft/microsoft.gpg /usr/share/keyrings/microsoft.gpg
 
-    # ── Microsoft Intune Portal  + Identity Broker────────────────────────────
+    # ── Microsoft Intune Portal ───────────────────────────────────────────────
     - curtin in-target --target=/target -- sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/ubuntu/24.04/prod noble main" > /etc/apt/sources.list.d/microsoft-ubuntu-noble-prod.list'
     - curtin in-target --target=/target -- apt-get update
-    # Install intune-portal and microsoft-identity-broker
-    - curtin in-target --target=/target -- apt-get install -y intune-portal microsoft-identity-broker
-
-    # ── Microsoft Edge ───────────────────────────────────────────────────────
-    - curtin in-target --target=/target -- sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge.list'
-    - curtin in-target --target=/target -- apt-get update
-    - curtin in-target --target=/target -- apt-get install -y microsoft-edge-stable
-    # Edge post-install overwrites microsoft-edge.list without signed-by → restore it
-    - curtin in-target --target=/target -- sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge.list'
+    - curtin in-target --target=/target -- apt-get install -y intune-portal
 
     # ── Microsoft Defender for Endpoint (MDE) ────────────────────────────────
-    # Installed from microsoft-ubuntu-noble-prod — no separate source needed
     - curtin in-target --target=/target -- apt-get install -y mdatp
 
-    # ── Clean up ──────────────────────────────────────────────────────────────
-    - curtin in-target --target=/target -- apt-get autoremove -y
-    - curtin in-target --target=/target -- apt-get clean
-    - curtin in-target --target=/target -- rm -rf /tmp/microsoft
+    # ── Microsoft Edge ────────────────────────────────────────────────────────
+    # FIX: use legacy trusted.gpg.d method to avoid signed-by conflicts
+    - curtin in-target --target=/target -- sh -c 'curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /tmp/microsoft/microsoft.gpg'
+    - curtin in-target --target=/target -- install -o root -g root -m 644 /tmp/microsoft/microsoft.gpg /etc/apt/trusted.gpg.d/microsoft-edge.gpg
+    - curtin in-target --target=/target -- sh -c 'echo "deb [arch=amd64] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge-dev.list'
+    - curtin in-target --target=/target -- apt-get update
+    - curtin in-target --target=/target -- apt-get install -y microsoft-edge-stable
 
-    # ── Remove bloatware (optional) ──────────────────────────────────────────
+    # ── Remove bloatware (optional) ───────────────────────────────────────────
     # - curtin in-target --target=/target -- apt-get purge -y libreoffice* remmina* transmission*
+    # - curtin in-target --target=/target -- apt-get autoremove -y
+    # - curtin in-target --target=/target -- apt-get clean
