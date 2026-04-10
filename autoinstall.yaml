@@ -251,12 +251,13 @@ autoinstall:
     - curtin in-target --target=/target -- sh -c 'curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /tmp/microsoft/microsoft.gpg'
     - curtin in-target --target=/target -- install -o root -g root -m 644 /tmp/microsoft/microsoft.gpg /usr/share/keyrings/microsoft.gpg
 
-    # ── Microsoft Intune Portal ───────────────────────────────────────────────
+    # ── Microsoft Intune Portal  + Identity Broker────────────────────────────
     - curtin in-target --target=/target -- sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/ubuntu/24.04/prod noble main" > /etc/apt/sources.list.d/microsoft-ubuntu-noble-prod.list'
     - curtin in-target --target=/target -- apt-get update
-    - curtin in-target --target=/target -- apt-get install -y intune-portal
+    # Install intune-portal and microsoft-identity-broker
+    - curtin in-target --target=/target -- apt-get install -y intune-portal microsoft-identity-broker
 
-    # ── Microsoft Edge ────────────────────────────────────────────────────────
+    # ── Microsoft Edge ───────────────────────────────────────────────────────
     - curtin in-target --target=/target -- sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge.list'
     - curtin in-target --target=/target -- apt-get update
     - curtin in-target --target=/target -- apt-get install -y microsoft-edge-stable
@@ -267,7 +268,10 @@ autoinstall:
     # Installed from microsoft-ubuntu-noble-prod — no separate source needed
     - curtin in-target --target=/target -- apt-get install -y mdatp
 
-    # ── Remove bloatware (optional) ───────────────────────────────────────────
+    # ── Clean up ──────────────────────────────────────────────────────────────
+    - curtin in-target --target=/target -- apt-get autoremove -y
+    - curtin in-target --target=/target -- apt-get clean
+    - curtin in-target --target=/target -- rm -rf /tmp/microsoft
+
+    # ── Remove bloatware (optional) ──────────────────────────────────────────
     # - curtin in-target --target=/target -- apt-get purge -y libreoffice* remmina* transmission*
-    # - curtin in-target --target=/target -- apt-get autoremove -y
-    # - curtin in-target --target=/target -- apt-get clean
